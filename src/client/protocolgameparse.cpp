@@ -108,6 +108,9 @@ void ProtocolGame::parseMessage(const InputMessagePtr& msg)
                 case Proto::GameServerBugReport:
                     parseBugReport(msg);
                     break;
+                case Proto::GameServerNpcDialog:
+                    parseNpcDialog(msg);
+                    break;
                 case Proto::GameServerPingBack:
                 case Proto::GameServerPing:
                     if (((opcode == Proto::GameServerPing) && (g_game.getFeature(Otc::GameClientPing))) ||
@@ -164,6 +167,9 @@ void ProtocolGame::parseMessage(const InputMessagePtr& msg)
                     break;
                 case Proto::GameServerFloorDescription:
                     parseFloorDescription(msg);
+                    break;
+                case Proto::GameServerWeeklyTaskData:
+                    parseWeeklyTaskData(msg);
                     break;
                 case Proto::GameServerWeaponProficiencyExperience:
                     parseWeaponProficiencyExperience(msg);
@@ -761,6 +767,25 @@ void ProtocolGame::parseBugReport(const InputMessagePtr& msg)
     g_game.setCanReportBugs(canReportBugs);
 }
 
+void ProtocolGame::parseNpcDialog(const InputMessagePtr& msg)
+{
+    uint8_t noData = msg->getU8();
+    if (noData) {
+        return;
+    }
+
+    uint8_t count = msg->getU8();
+    for (uint8_t i = 0; i < count; i++) {
+        uint32_t npcId = msg->getU32(); // npcId
+
+        uint8_t buttonCount = msg->getU8();
+        for (uint8_t o = 0; o < buttonCount; o++) {
+            msg->getU8(); // buttonId
+            msg->getString(); // button text
+        }
+    }
+}
+
 void ProtocolGame::parsePendingGame(const InputMessagePtr&)
 {
     //set player to pending game state
@@ -820,7 +845,9 @@ void ProtocolGame::parseResourceBalance(const InputMessagePtr& msg) const
         case Otc::RESOURCE_MINOR_CHARM:
         case Otc::RESOURCE_MAX_CHARM:
         case Otc::RESOURCE_MAX_MINOR_CHARM:
-            // 14.10
+        case Otc::RESOURCE_BOUNTY_POINTS:
+        case Otc::RESOURCE_SOULSEALS_POINTS:
+            // 14.10 - 15.20
             value = msg->getU32();
             break;
         default:
@@ -1308,6 +1335,9 @@ void ProtocolGame::parseUpdateNeeded(const InputMessagePtr& msg)
 void ProtocolGame::parseLoginError(const InputMessagePtr& msg)
 {
     const auto& error = msg->getString();
+    if (g_game.getClientVersion() >= 1523) { // reason byte
+        msg->getU8();
+    }
     g_game.processLoginError(error);
 }
 
@@ -1865,6 +1895,9 @@ void ProtocolGame::parseMagicEffect(const InputMessagePtr& msg)
                     const uint16_t shotId = g_game.getFeature(Otc::GameEffectU16) ? msg->getU16() : msg->getU8();
                     const auto offsetX = static_cast<int8_t>(msg->getU8());
                     const auto offsetY = static_cast<int8_t>(msg->getU8());
+                    if (g_game.getProtocolVersion() >= 1520) {
+                        msg->getU8(); // effect source
+                    }
                     if (!g_things.isValidDatId(shotId, ThingCategoryMissile)) {
                         g_logger.traceError("invalid missile id {}", shotId);
                         return;
@@ -1888,6 +1921,9 @@ void ProtocolGame::parseMagicEffect(const InputMessagePtr& msg)
                     if (!g_things.isValidDatId(effectId, ThingCategoryEffect)) {
                         g_logger.traceError("invalid effect id {}", effectId);
                         continue;
+                    }
+                    if (g_game.getProtocolVersion() >= 1520) {
+                        msg->getU8(); // effect source
                     }
 
                     const auto& effect = std::make_shared<Effect>();
@@ -2528,7 +2564,12 @@ void ProtocolGame::parsePlayerStats(const InputMessagePtr& msg) const
 
     const uint64_t experience = g_game.getFeature(Otc::GameDoubleExperience) ? msg->getU64() : msg->getU32();
     const uint16_t level = g_game.getFeature(Otc::GameLevelU16) ? msg->getU16() : msg->getU8();
-    const uint8_t levelPercent = msg->getU8();
+    uint8_t levelPercent;
+	if (g_game.getClientVersion() >= 1512) {
+		levelPercent = msg->getU16() / 100;
+	} else {
+		levelPercent = msg->getU8();;
+	}
 
     if (g_game.getFeature(Otc::GameExperienceBonus)) {
         if (g_game.getClientVersion() <= 1096) {
@@ -4928,6 +4969,11 @@ void ProtocolGame::parseCyclopediaCharacterInfo(const InputMessagePtr& msg)
             stats.experience = msg->getU64();
             stats.level = msg->getU16();
             stats.levelPercent = msg->getU8();
+            if (g_game.getClientVersion() >= 1512) {
+                stats.levelPercent = msg->getU16() / 100;
+            } else {
+                stats.levelPercent = msg->getU8();;
+            }
             stats.baseExpGain = msg->getU16();
             if (g_game.getFeature(Otc::GameTournamentPackets)) {
                 msg->getU32(); // tournament exp(deprecated)
@@ -5425,6 +5471,13 @@ void ProtocolGame::parseCyclopediaCharacterInfo(const InputMessagePtr& msg)
                 msg->getU8(); // unused
                 msg->getU8(); // unused
                 msg->getU8(); // unused
+
+                if (g_game.getClientVersion() >= 1520) {
+                    msg->getDouble(); // damage to targets above 95% hp
+                    msg->getDouble(); // damage to targets below 30% hp
+                    msg->getDouble(); // armor penetration multiplier
+                    msg->getU8(); // elemental pierce count
+                }
             }
 
             g_game.processCyclopediaCharacterOffenceStats(data);
@@ -5830,10 +5883,12 @@ void ProtocolGame::parsePreyRerollPrice(const InputMessagePtr& msg)
     if (g_game.getProtocolVersion() >= 1230) {
         wildcard = msg->getU8();
         directly = msg->getU8();
-        msg->getU32(); // task hunting reroll price
-        msg->getU32(); // task hunting reroll price
-        msg->getU8(); // task hunting selection list price
-        msg->getU8(); // task hunting bonus reroll price
+        if (g_game.getProtocolVersion() < 1520) {
+            msg->getU32(); // task hunting reroll price
+            msg->getU32(); // task hunting reroll price
+            msg->getU8(); // task hunting selection list price
+            msg->getU8(); // task hunting bonus reroll price
+        }
     }
 
     g_lua.callGlobalField("g_game", "onPreyRerollPrice", price, wildcard, directly);
@@ -6481,6 +6536,128 @@ void ProtocolGame::parseHighscores(const InputMessagePtr& msg)
     g_game.processHighscore(serverName, world, worldType, battlEye, vocations, categories, page, totalPages, highscores, entriesTs);
 }
 
+void ProtocolGame::parseWeeklyTaskData(const InputMessagePtr& msg)
+{
+    if (msg->getUnreadSize() < 1) {
+        g_logger.traceError("ProtocolGame::parseWeeklyTaskData: malformed packet ({} unread bytes)", msg->getUnreadSize());
+        return;
+    }
+
+    constexpr uint8_t TASK_BOARD_BOUNTY = 0;
+    constexpr uint8_t TASK_BOARD_WEEKLY = 1;
+    constexpr uint8_t TASK_BOARD_HUNT_SHOP = 2;
+
+    constexpr uint8_t TASK_BOARD_SHOP_OFFER_OUTFIT = 2;
+    constexpr uint8_t TASK_BOARD_SHOP_OFFER_ITEM_DOUBLE = 3;
+    constexpr uint8_t TASK_BOARD_SHOP_OFFER_BONUS_PROMOTION = 4;
+
+    constexpr uint8_t TASK_BOARD_TALISMAN_PATHS = 3;
+
+    const auto subtype = msg->getU8();
+    switch (subtype) {
+        case TASK_BOARD_BOUNTY: {
+            const uint8_t offerCount = msg->getU8();
+            for (uint8_t i = 0; i < offerCount; ++i) {
+                msg->getU8();  // taskIndex
+                msg->getU16(); // raceId
+                msg->getU16(); // totalKills
+                msg->getU32(); // rewardXp
+                msg->getU8();  // rewardPoints
+                msg->getU16(); // currentKills
+                msg->getU8();  // claim reward state
+                msg->getU8();  // rarity
+            }
+
+            msg->getU8(); // rerollPoints
+            msg->getU8(); // rerollMode
+            msg->getU8(); // difficulty
+
+            for (uint8_t i = 0; i < TASK_BOARD_TALISMAN_PATHS; ++i) {
+                msg->getU8();  // currentLevel
+                msg->getU8();  // multiplier2
+                msg->getU8();  // isActiveUpgrade
+                msg->getU16(); // upgradeCost
+            }
+
+            const uint8_t preferredSlotCount = msg->getU8();
+            for (uint8_t i = 0; i < preferredSlotCount; ++i) {
+                msg->getU8();  // locked
+                msg->getU16(); // preferred
+                msg->getU16(); // unwanted
+            }
+            return;
+        }
+        case TASK_BOARD_WEEKLY: {
+            msg->getU16(); // anyCreatureTotalKills
+            msg->getU16(); // anyCreatureCurrentKills
+
+            const uint8_t killTasksCount = msg->getU8();
+            for (uint8_t i = 0; i < killTasksCount; ++i) {
+                msg->getU16(); // raceId
+                msg->getU16(); // total
+                msg->getU16(); // current
+            }
+
+            const uint8_t deliveryTasksCount = msg->getU8();
+            for (uint8_t i = 0; i < deliveryTasksCount; ++i) {
+                msg->getU8();  // slotIndex
+                msg->getU16(); // itemId
+                msg->getU8();  // unknown1
+                msg->getU8();  // unknown2
+                msg->getU32(); // total
+                msg->getU32(); // current
+                msg->getU8();  // claimed
+            }
+
+            msg->getU8();  // difficultyMultiplier
+            msg->getU32(); // maxExperience
+            msg->getU32(); // maxDeliveryExperience
+            msg->getU8();  // completedKillTasks
+            msg->getU8();  // completedDeliveryTasks
+            msg->getU8();  // weeklyProgressFinished
+            msg->getU8();  // unlockedDifficulty
+            msg->getU32(); // resetTimestamp
+            msg->getU8();  // weeklyTaskExpansion
+            msg->getU32(); // pointsEarned
+            msg->getU32(); // soulsealsEarned
+            return;
+        }
+        case TASK_BOARD_HUNT_SHOP: {
+            const uint8_t offersCount = msg->getU8();
+            for (uint8_t i = 0; i < offersCount; ++i) {
+                const uint8_t offerType = msg->getU8();
+                if (offerType == TASK_BOARD_SHOP_OFFER_BONUS_PROMOTION) {
+                    msg->getU16(); // purchasedDisplayValue
+                    msg->getU32(); // nextCost
+                    msg->getU8();  // status
+                    continue;
+                }
+
+                msg->getString(); // title
+                msg->getString(); // description
+                msg->getU32();    // looktypeOrItemId
+
+                if (offerType == TASK_BOARD_SHOP_OFFER_OUTFIT) {
+                    msg->getU8(); // addons
+                }
+                if (offerType == TASK_BOARD_SHOP_OFFER_ITEM_DOUBLE) {
+                    msg->getU32(); // second item id
+                }
+
+                msg->getU32(); // price
+                msg->getU8();  // status
+            }
+            return;
+        }
+        default:
+            g_logger.warning(
+                "ProtocolGame::parseWeeklyTaskData: unknown subtype {} ({} unread bytes remain in packet)",
+                static_cast<uint32_t>(subtype), msg->getUnreadSize());
+            msg->setReadPos(msg->getMessageSize());
+            return;
+    }
+}
+
 void ProtocolGame::parseWeaponProficiencyExperience(const InputMessagePtr& msg)
 {
     msg->getU16(); // itemId
@@ -6576,6 +6753,10 @@ void ProtocolGame::parseOpenWheelWindow(const InputMessagePtr& msg)
     if (g_game.getProtocolVersion() >= 1500 && msg->getUnreadSize() > 0) {
         hasMonkQuest = msg->getU8();
         g_logger.debug(fmt::format("[Wheel C++ Parse] hasMonkQuest lido (valor={})", static_cast<int>(hasMonkQuest)));
+    }
+
+    if (g_game.getProtocolVersion() >= 1520 && msg->getUnreadSize() > 0) {
+        msg->getU16(); // wheel points from hunting task shop
     }
 
     // Gems ativas (equipadas)
