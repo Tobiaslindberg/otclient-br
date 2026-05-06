@@ -6469,7 +6469,124 @@ void ProtocolGame::parseHighscores(const InputMessagePtr& msg)
 
 void ProtocolGame::parseWeeklyTaskData(const InputMessagePtr& msg)
 {
-    // client cannot request so not needed here
+    if (msg->getUnreadSize() < 1) {
+        g_logger.traceError("ProtocolGame::parseWeeklyTaskData: malformed packet ({} unread bytes)", msg->getUnreadSize());
+        return;
+    }
+
+    constexpr uint8_t TASK_BOARD_BOUNTY = 0;
+    constexpr uint8_t TASK_BOARD_WEEKLY = 1;
+    constexpr uint8_t TASK_BOARD_HUNT_SHOP = 2;
+
+    constexpr uint8_t TASK_BOARD_SHOP_OFFER_OUTFIT = 2;
+    constexpr uint8_t TASK_BOARD_SHOP_OFFER_ITEM_DOUBLE = 3;
+    constexpr uint8_t TASK_BOARD_SHOP_OFFER_BONUS_PROMOTION = 4;
+
+    constexpr uint8_t TASK_BOARD_TALISMAN_PATHS = 3;
+
+    const auto subtype = msg->getU8();
+    switch (subtype) {
+        case TASK_BOARD_BOUNTY: {
+            const uint8_t offerCount = msg->getU8();
+            for (uint8_t i = 0; i < offerCount; ++i) {
+                msg->getU8();  // taskIndex
+                msg->getU16(); // raceId
+                msg->getU16(); // totalKills
+                msg->getU32(); // rewardXp
+                msg->getU8();  // rewardPoints
+                msg->getU16(); // currentKills
+                msg->getU8();  // claim reward state
+                msg->getU8();  // rarity
+            }
+
+            msg->getU8(); // rerollPoints
+            msg->getU8(); // rerollMode
+            msg->getU8(); // difficulty
+
+            for (uint8_t i = 0; i < TASK_BOARD_TALISMAN_PATHS; ++i) {
+                msg->getU8();  // currentLevel
+                msg->getU8();  // multiplier2
+                msg->getU8();  // isActiveUpgrade
+                msg->getU16(); // upgradeCost
+            }
+
+            const uint8_t preferredSlotCount = msg->getU8();
+            for (uint8_t i = 0; i < preferredSlotCount; ++i) {
+                msg->getU8();  // locked
+                msg->getU16(); // preferred
+                msg->getU16(); // unwanted
+            }
+            return;
+        }
+        case TASK_BOARD_WEEKLY: {
+            msg->getU16(); // anyCreatureTotalKills
+            msg->getU16(); // anyCreatureCurrentKills
+
+            const uint8_t killTasksCount = msg->getU8();
+            for (uint8_t i = 0; i < killTasksCount; ++i) {
+                msg->getU16(); // raceId
+                msg->getU16(); // total
+                msg->getU16(); // current
+            }
+
+            const uint8_t deliveryTasksCount = msg->getU8();
+            for (uint8_t i = 0; i < deliveryTasksCount; ++i) {
+                msg->getU8();  // slotIndex
+                msg->getU16(); // itemId
+                msg->getU8();  // unknown1
+                msg->getU8();  // unknown2
+                msg->getU32(); // total
+                msg->getU32(); // current
+                msg->getU8();  // claimed
+            }
+
+            msg->getU8();  // difficultyMultiplier
+            msg->getU32(); // maxExperience
+            msg->getU32(); // maxDeliveryExperience
+            msg->getU8();  // completedKillTasks
+            msg->getU8();  // completedDeliveryTasks
+            msg->getU8();  // weeklyProgressFinished
+            msg->getU8();  // unlockedDifficulty
+            msg->getU32(); // resetTimestamp
+            msg->getU8();  // weeklyTaskExpansion
+            msg->getU32(); // pointsEarned
+            msg->getU32(); // soulsealsEarned
+            return;
+        }
+        case TASK_BOARD_HUNT_SHOP: {
+            const uint8_t offersCount = msg->getU8();
+            for (uint8_t i = 0; i < offersCount; ++i) {
+                const uint8_t offerType = msg->getU8();
+                if (offerType == TASK_BOARD_SHOP_OFFER_BONUS_PROMOTION) {
+                    msg->getU16(); // purchasedDisplayValue
+                    msg->getU32(); // nextCost
+                    msg->getU8();  // status
+                    continue;
+                }
+
+                msg->getString(); // title
+                msg->getString(); // description
+                msg->getU32();    // looktypeOrItemId
+
+                if (offerType == TASK_BOARD_SHOP_OFFER_OUTFIT) {
+                    msg->getU8(); // addons
+                }
+                if (offerType == TASK_BOARD_SHOP_OFFER_ITEM_DOUBLE) {
+                    msg->getU32(); // second item id
+                }
+
+                msg->getU32(); // price
+                msg->getU8();  // status
+            }
+            return;
+        }
+        default:
+            g_logger.warning(
+                "ProtocolGame::parseWeeklyTaskData: unknown subtype {} ({} unread bytes remain in packet)",
+                static_cast<uint32_t>(subtype), msg->getUnreadSize());
+            msg->setReadPos(msg->getMessageSize());
+            return;
+    }
 }
 
 void ProtocolGame::parseWeaponProficiencyExperience(const InputMessagePtr& msg)
